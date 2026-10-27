@@ -19,7 +19,7 @@ The CNIPS CLI enables local development, testing, and deployment of integration 
 ### CLI contracts
 
 - **Login required** for network sync and publish: `pull`, `push`, `resolve`, `publish`, `switch`, and `status` / `diff` with `--remote`.
-- **Works offline** (no saved token): `init`, `login`, `logout`, `discard`, `add`, `rename`, `fmt`, `validate`, `build`, `run`, `trace`, `stash`, local `status` / `diff`, plus `help`, `completion`, and `version`.
+- **Works offline** (no saved token): `init`, `login`, `logout`, `profile`, `discard`, `add`, `rename`, `fmt`, `validate`, `build`, `run`, `trace`, `stash`, local `status` / `diff`, plus `help`, `completion`, and `version`.
 - **Exit codes:** Command failures that already printed a themed error (validate, `fmt --dry-run`, push reject, build target errors, failed pipeline `run`, `diff --exit-code`) exit **1**. User cancel on confirm/menus exits **0**.
 - **Output conventions:** `✓` success, `⚠` warning, `✗` error, `›` info (dry runs use `›`, never `✓`). Every "Next steps:" hint is printed after a blank line with each command indented under the heading. Running a project command outside a project prints `✗ Not a cnips project (no cnips.yaml in <dir> or any parent)` with `cnips init` next steps.
 - **Scaffold / `--type` kinds:** `source`, `destination`, `transformation`, `approval`, `switch`, `decision`, `function` (legacy type `component` is not supported).
@@ -187,7 +187,8 @@ cnips push
 | Command | Description |
 |---------|-------------|
 | `cnips login` | Authenticate with CNIPS (browser OIDC or token) |
-| `cnips logout` | Clear the saved token for the current profile (workspace config kept) |
+| `cnips logout` | Log this folder out (the profile is removed once no folder uses it) |
+| `cnips profile` | Show this folder's login, list all saved logins, or clear them |
 | `cnips switch` | Switch workspace after confirming local artifacts can be discarded |
 
 ### Workspace Sync
@@ -271,12 +272,23 @@ On success it prints `✓ Renamed …`, one details line (`moved <old> -> <new> 
 cnips login [--base-url <url>] [--token <token>] [--workspace <id>]
 ```
 
-On first login, when no workspace is saved in the local config, the CLI shows
-an interactive workspace picker (arrow keys / numbered quick pick). The
-`default` workspace is listed first so Enter selects it. After `cnips logout`,
-the next login keeps the existing workspace selection and refreshes only the
-token. To change the workspace, use `cnips switch`. Success prints
-`✓ Logged in to <host> · workspace <name>`.
+Logins are per folder (the project root, or the current directory outside a
+project). In a folder without a login, a TTY run first offers your saved logins
+as `<host> · <user>` plus **New login (enter base URL)**. Picking one logs in to
+that instance (reusing its cached browser token) and fetches a fresh workspace
+list, so the same login can serve another workspace in another folder.
+
+The workspace is then chosen in this order:
+1. `--workspace`, when given.
+2. This folder's previous workspace on the same instance.
+3. The workspace the project was already pulled from, when exactly one is
+   found locally: `ℹ Using workspace <name> from this project's data. Run cnips
+   switch to change workspaces.` This covers re-login after an expired session
+   or a removed profile.
+4. Otherwise an interactive picker (`default` first, so Enter selects it); a
+   single workspace is picked automatically.
+
+Success prints `✓ Logged in to <host> · workspace <name>`.
 
 **Flags:**
 - `--base-url` — CNIPS origin URL (required with `--token`; prompted on a TTY when omitted)
@@ -290,10 +302,24 @@ token. To change the workspace, use `cnips switch`. Success prints
 cnips logout
 ```
 
-Clears token fields from the selected auth profile while keeping the base URL,
-tenant, workspace list, and selected workspace. Commands that contact cnips
-and project commands require `cnips login` again before they can use the saved
-profile.
+Logs this folder out. The folder is detached from its profile; the profile
+(and its cached token) is deleted only when no other folder uses it. Outside a
+logged-in folder nothing changes. Run `cnips login` again in the folder; a
+pulled project keeps its workspace automatically.
+
+### `cnips profile`
+
+```bash
+cnips profile                 # this folder's login
+cnips profile --all           # every saved login and its folders
+cnips profile --clear         # same as cnips logout
+cnips profile --clear --all   # delete every saved login (asks first)
+```
+
+Each login prints as one line, `<host> · workspace <name> · <user> · <state>`,
+coloured by state: `✓` logged in, `⚠` token expired, faint when logged out.
+`--clear --all` asks with a Yes/No menu on a TTY and requires an explicit `y`
+when stdin is piped.
 
 ### `cnips switch`
 
@@ -301,7 +327,9 @@ profile.
 cnips switch [--pull|--no-pull]
 ```
 
-Switches the selected workspace for the current profile. The command warns that
+Switches the workspace for this folder's login. It must run inside a cnips
+project; outside one it stops with the `Not a cnips project` hint before any
+prompt. The command warns that
 local cnips files will be deleted and, when the project has unpushed local
 changes, says how many (`3 local change(s) not pushed — run cnips push first to
 push them.`) before it asks for confirmation. It then shows only
@@ -676,21 +704,25 @@ spec:
 
 ### Auth Profiles
 
-Authentication profiles are stored in the local user config directory, usually
-`~/.config/cnips/config.json`:
+Logins are stored in the local user config directory, usually
+`~/.config/cnips/config.json`. Each entry is one user on one instance and
+workspace, with the folders that use it:
 
 ```json
 {
-  "currentProfile": "default",
-  "profiles": {
-    "default": {
-      "apiUrl": "https://your-cnips-instance.com",
+  "logins": [
+    {
+      "baseUrl": "https://your-cnips-instance.com",
+      "userId": "…",
       "workspaceId": "default",
-      "tenantKey": "my-tenant"
+      "directories": ["/home/me/project-a"]
     }
-  }
+  ]
 }
 ```
+
+A folder without an entry has no login; use `cnips profile --all` to inspect
+them.
 
 ### Environment variables
 
