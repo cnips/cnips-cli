@@ -19,7 +19,7 @@ The CNIPS CLI enables local development, testing, and deployment of integration 
 ### CLI contracts
 
 - **Login required** for network sync and publish: `pull`, `push`, `resolve`, `publish`, `switch`, and `status` / `diff` with `--remote`.
-- **Works offline** (no saved token): `init`, `login`, `logout`, `profile`, `discard`, `add`, `rename`, `fmt`, `validate`, `build`, `run`, `trace`, `stash`, local `status` / `diff`, plus `help`, `completion`, and `version`.
+- **Works offline** (no saved token): `init`, `login`, `logout`, `profile`, `discard`, `add`, `rename`, `fmt`, `validate`, `build`, `run`, `trace`, `stash`, local `status` / `diff`, plus `doctor`, `help`, `completion`, and `version`.
 - **Exit codes:** Command failures that already printed a themed error (validate, `fmt --dry-run`, push reject, build target errors, failed pipeline `run`, `diff --exit-code`) exit **1**. User cancel on confirm/menus exits **0**.
 - **Output conventions:** `✓` success, `⚠` warning, `✗` error, `›` info (dry runs use `›`, never `✓`). Every "Next steps:" hint is printed after a blank line with each command indented under the heading. Running a project command outside a project prints `✗ Not a cnips project (no cnips.yaml in <dir> or any parent)` with `cnips init` next steps.
 - **Scaffold / `--type` kinds:** `source`, `destination`, `transformation`, `approval`, `switch`, `decision`, `function` (legacy type `component` is not supported).
@@ -36,6 +36,18 @@ The CNIPS CLI enables local development, testing, and deployment of integration 
 - **Editor Helpers** — `cnips init` / `cnips pull` install VS Code YAML schema overrides for `component.yaml`
 - **Validation & Formatting** — Lint project files, detect secret leaks, and enforce canonical YAML formatting
 - **Marketplace Publishing** — Submit components directly to the CNIPS marketplace
+
+## Prerequisites
+
+`cnips` itself is a single binary. Building and running components, functions and apps locally needs the toolchain for their language:
+
+| Dependency | Minimum | Needed for |
+|---|---|---|
+| [Go](https://go.dev/dl/) | 1.24 | Go components and functions |
+| [Bun](https://bun.sh/docs/installation) (recommended) or [Node.js](https://nodejs.org/en/download) | Bun 1.3 / Node.js 20 | JavaScript/TypeScript components and functions |
+| [Python](https://www.python.org/downloads/) | 3.12 | Python components (Python is not supported for functions) |
+
+Run `cnips doctor` after installing to check them. Missing toolchains are warnings: `cnips build`, `cnips run` and `cnips fn` only refuse plugins in that language — the others still build, run and push.
 
 ## Installation
 
@@ -68,6 +80,7 @@ Download the archive for your platform, extract it, and put `cnips` on your `PAT
 ```bash
 cnips version
 cnips --help
+cnips doctor   # check prerequisites
 ```
 
 ### Distribution
@@ -178,8 +191,9 @@ cnips push
 | `cnips init [name]` | Scaffold a new CNIPS project |
 | `cnips add [type] <name>` | Create a new component or function |
 | `cnips rename [type] <old> <new>` | Rename a component, function, or pipeline |
-| `cnips validate` | Validate project files before push |
+| `cnips validate [--all]` | Validate locally changed files before push (`--all` for the whole project) |
 | `cnips fmt [path]` | Format CNIPS YAML files canonically |
+| `cnips doctor` | Check Go, Bun/Node.js and Python versions (warnings only) |
 | `cnips build [name] [--force]` | Build components and functions (any failed target → exit 1) |
 
 ### Authentication
@@ -239,13 +253,13 @@ cnips add <type> <name> --language <lang> [...]
 
 **Flags:**
 - `--type, -t` — Type: `source`, `destination`, `transformation`, `approval`, `switch`, `decision`, or `function` (optional when type is the first positional argument)
-- `--language, -l` — Language: `javascript`, `python`, or `go`
+- `--language, -l` — Language: `javascript`, `python`, or `go` (`python` is not available for functions)
 - `--method` — Function HTTP method: `GET`, `POST`, `PUT`, or `DELETE` (`POST` by default)
 - `--description, -d` — Description for the component manifest
 
 On success the command refreshes `cnips.lock`, prints one details line (`language go · signature fiber-v2 · template 1.4.0 · cnips.lock updated`) and indented next steps (`edit` → `cnips validate` → `cnips push`). Interactive TTY sessions also prompt for HTTP method (functions) when omitted.
 
-Go functions always scaffold with Fiber (`fiber-v2`). Function manifests use lowercase signature versions such as `express-v3`, `fiber-v2`, and `python-v1`.
+Go functions always scaffold with Fiber (`fiber-v2`). Function manifests use lowercase signature versions such as `express-v3` and `fiber-v2`.
 
 ### `cnips rename`
 
@@ -295,6 +309,8 @@ Success prints `✓ Logged in to <host> · workspace <name>`.
 - `--token` — Bearer token for direct authentication (browser login when omitted)
 - `--workspace` — Workspace to select (required when stdin is not a TTY)
 - `--force` — Force fresh login, ignoring cached tokens
+
+Browser login listens on a random free loopback port for the callback (like `gh` / `gcloud`), so a busy port such as 3000 never blocks it.
 
 ### `cnips logout`
 
@@ -605,7 +621,7 @@ In the step-by-step event view (`--event N`) each step line is bold with a colou
 ### `cnips validate`
 
 ```bash
-cnips validate [--type <type>]
+cnips validate [--type <type>] [--all]
 ```
 
 Validates project files before push:
@@ -616,12 +632,15 @@ Validates project files before push:
 - Secret leak detection (literal credentials in YAML)
 - Lock file integrity verification
 - Language requirements for coded extractors only (streaming sources such as Kafka/MQTT do not require a language)
+- Component language and `signatureVersion` against the available templates, and required entry files (`handler.js` + valid `package.json`, `main.go`, `main.py`) for coded components and functions
+- Python functions are rejected (functions support `javascript` and `go` only)
+- Pipeline structure: every step reachable from another step, no cycles (loop steps excepted); steps without a `layout.yaml` position warn and are placed on a default grid by push
 
 Configuration checks: plain-text secrets (encrypted by the next `fmt` / `push`), `platform://` placeholders left by older CLI versions (run `cnips pull`), and `${{ env.<configuration> }}` references in pipelines.
 
 Findings are grouped under the item they belong to (for example `› pipelines/orders`), with each error marked `✗` and each warning `⚠`, indented below it. The command ends with `✗ Validation failed · 2 errors · 1 warning` or `✓ Validation passed`.
 
-`cnips validate` checks the whole project. `cnips push`, `cnips run` and `cnips build` run the same checks but report only findings for the artifacts they touch (`✓ Validation passed for N components`); `cnips.yaml` and `cnips.lock` findings always count.
+By default `cnips validate` checks only artifacts changed locally since the last pull (plus `cnips.yaml` / `cnips.lock`); a project that was never pulled is checked in full. `--all` checks the whole project. `cnips push`, `cnips run` and `cnips build` run the same checks but report only findings for the artifacts they touch (`✓ Validation passed for N components`); `cnips.yaml` and `cnips.lock` findings always count.
 
 ### `cnips fmt`
 
@@ -857,8 +876,7 @@ cnips resolve --accept-local     # or --accept-cnips / --write-conflicts
 
 ## Requirements
 
-- **Bun** (recommended) or **Node.js** for JavaScript/TypeScript functions
-- **Python 3.12+** for Python functions
+- Runtimes for local builds — see [Prerequisites](#prerequisites)
 - Access to a **CNIPS instance** for sync and publish operations
 
 ## License
